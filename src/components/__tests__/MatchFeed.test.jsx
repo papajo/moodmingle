@@ -20,8 +20,10 @@ const MockUserProvider = ({ children }) => (
 );
 
 // We need to mock the useUser hook directly since we can't easily wrap with the real provider in this setup without more mocking
+const mockHookUser = { id: 1, username: 'TestUser' };
 vi.mock('../../contexts/UserContext', () => ({
-    useUser: () => ({ user: { id: 1, username: 'TestUser' } })
+    useUser: () => ({ user: mockHookUser }),
+    UserProvider: ({ children }) => <div>{children}</div> // partial mock if needed
 }));
 
 describe('MatchFeed', () => {

@@ -3,8 +3,9 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import Journal from '../Journal.jsx';
 
 // Mock UserContext to provide a deterministic user
+const mockUser = { id: 1, username: 'TestUser' };
 vi.mock('../../contexts/UserContext', () => ({
-  useUser: () => ({ user: { id: 1, username: 'TestUser' } })
+  useUser: () => ({ user: mockUser })
 }));
 
 vi.mock('../../config/api', () => ({
@@ -22,7 +23,7 @@ describe('Journal Component - Robust Tests', () => {
   it('renders journal interface after load', async () => {
     fetch.mockResolvedValueOnce({ ok: true, json: async () => [] });
 
-    render(<Journal onClose={() => {}} />);
+    render(<Journal onClose={() => { }} />);
 
     await waitFor(() => {
       expect(screen.getByText('Daily Reflection')).toBeInTheDocument();
@@ -33,9 +34,9 @@ describe('Journal Component - Robust Tests', () => {
   it('saves a new journal entry and updates list', async () => {
     const newEntry = { id: 3, userId: 1, text: 'New entry', date: '1/3/2024', time: '12:00 PM' };
     fetch.mockResolvedValueOnce({ ok: true, json: async () => [] })
-         .mockResolvedValueOnce({ ok: true, json: async () => newEntry });
+      .mockResolvedValueOnce({ ok: true, json: async () => newEntry });
 
-    render(<Journal onClose={() => {}} />);
+    render(<Journal onClose={() => { }} />);
 
     await waitFor(() => {
       const ta = screen.getByPlaceholderText(/How are you feeling right now/);
@@ -53,7 +54,7 @@ describe('Journal Component - Robust Tests', () => {
   it('displays error when fetch fails on load', async () => {
     fetch.mockRejectedValueOnce(new Error('Failed to fetch'));
 
-    render(<Journal onClose={() => {}} />);
+    render(<Journal onClose={() => { }} />);
 
     await waitFor(() => {
       expect(screen.queryByText(/Failed to fetch/i)).toBeInTheDocument();

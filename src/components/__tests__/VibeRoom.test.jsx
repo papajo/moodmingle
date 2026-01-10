@@ -3,8 +3,9 @@ import { render, screen, waitFor } from '@testing-library/react';
 import VibeRoom from '../VibeRoom.jsx';
 
 // Mock user context to provide a logged-in user
+const mockUser = { id: 123, username: 'TestUser' };
 vi.mock('../../contexts/UserContext', () => ({
-  useUser: () => ({ user: { id: 123, username: 'TestUser' } })
+  useUser: () => ({ user: mockUser })
 }));
 // Mock API base URL
 vi.mock('../../config/api', () => ({ API_URL: 'http://localhost:3001', SOCKET_URL: 'http://localhost:3001' }));

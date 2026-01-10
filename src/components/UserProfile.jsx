@@ -107,11 +107,12 @@ const UserProfile = ({ onClose }) => {
 
                     {/* Status */}
                     <div>
-                        <label className="block text-sm font-medium text-gray-400 mb-2">
+                        <label htmlFor="status-input" className="block text-sm font-medium text-gray-400 mb-2">
                             Status
                         </label>
                         {isEditing ? (
                             <input
+                                id="status-input"
                                 type="text"
                                 value={status}
                                 onChange={(e) => setStatus(e.target.value)}
@@ -129,10 +130,11 @@ const UserProfile = ({ onClose }) => {
                     {/* Avatar URL */}
                     {isEditing && (
                         <div>
-                            <label className="block text-sm font-medium text-gray-400 mb-2">
+                            <label htmlFor="avatar-input" className="block text-sm font-medium text-gray-400 mb-2">
                                 Avatar URL
                             </label>
                             <input
+                                id="avatar-input"
                                 type="url"
                                 value={avatar}
                                 onChange={(e) => setAvatar(e.target.value)}
