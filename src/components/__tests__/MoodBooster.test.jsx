@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import MoodBooster from '../MoodBooster';
 import { moods } from '../../constants/moods';
 
@@ -105,5 +105,15 @@ describe('MoodBooster Component', () => {
 
         const glassPanels = container.querySelectorAll('.glass-panel');
         expect(glassPanels.length).toBeGreaterThan(0);
+    });
+    it('should show fallback when GIF fails to load', () => {
+        const happyMood = moods.find(m => m.id === 'happy');
+        render(<MoodBooster currentMood={happyMood} />);
+
+        const gif = screen.getByAltText('Keep shining!');
+        fireEvent.error(gif);
+
+        expect(screen.getByText('Image failed to load')).toBeInTheDocument();
+        expect(screen.queryByAltText('Keep shining!')).not.toBeInTheDocument();
     });
 });

@@ -52,15 +52,39 @@ const MoodBooster = ({ currentMood }) => {
                                 <p className="text-lg italic text-gray-200 font-serif">"{item.text}"</p>
                             </div>
                         ) : (
-                            <div className="rounded-xl overflow-hidden relative group">
-                                <img src={item.url} alt={item.label} className="w-full h-48 object-cover" />
-                                <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <span className="text-white font-bold text-xl">{item.label}</span>
-                                </div>
-                            </div>
+                            <GifItem item={item} />
                         )}
                     </motion.div>
                 ))}
+            </div>
+        </div>
+    );
+};
+
+const GifItem = ({ item }) => {
+    const [hasError, setHasError] = React.useState(false);
+
+    if (hasError) {
+        return (
+            <div className="rounded-xl h-48 bg-white/10 flex items-center justify-center text-gray-400 p-4 text-center">
+                <div className="flex flex-col items-center gap-2">
+                    <span className="text-2xl">😕</span>
+                    <span className="text-sm">Image failed to load</span>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="rounded-xl overflow-hidden relative group">
+            <img
+                src={item.url}
+                alt={item.label}
+                className="w-full h-48 object-cover"
+                onError={() => setHasError(true)}
+            />
+            <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <span className="text-white font-bold text-xl">{item.label}</span>
             </div>
         </div>
     );
