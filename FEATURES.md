@@ -1,0 +1,368 @@
+# MoodMingle - Feature Testing Plan
+
+## 🎯 Testing Status Legend
+- ✅ **Implemented & Tested**
+- 🟡 **Partially Implemented** 
+- 🔴 **Not Implemented/Broken**
+- 🔄 **Currently Being Tested**
+
+---
+
+## 1. Core Functionality Features
+
+### 1.1 Mood Tracking System
+**Description**: Users can select their current emotional state from 5 predefined moods
+**Components**: `MoodTracker.jsx`, API: `POST /api/mood`, `GET /api/mood/:userId`
+**Database**: `users.current_mood_id`, `mood_logs` table
+
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Verify all 5 moods (happy, chill, energetic, sad, romantic) are displayed correctly
+- [ ] Test mood selection triggers API call with correct moodId
+- [ ] Test current mood highlighting/selection state
+- [ ] Test mood change persistence to database
+- [ ] Test mood validation (only valid moods accepted)
+- [ ] Test mood change updates in real-time across components
+
+---
+
+### 1.2 User Management System
+**Description**: Automatic user creation and profile management
+**Components**: `UserContext.jsx`, API: `POST /api/users`, `GET /api/users/:id`, `PATCH /api/users/:id`
+**Database**: `users` table
+
+**Test Status**: ✅ **Implemented & Tested**
+
+**Test Cases**:
+- [x] Test user creation on first visit with random username
+- [x] Test user retrieval from localStorage persistence
+- [x] Test profile update functionality (status, avatar)
+- [x] Test username validation (3-30 chars, alphanumeric + underscore/hyphen)
+- [x] Test avatar URL update and validation (max 500 chars)
+- [x] Test status update and validation (max 100 chars)
+- [x] Test last_active timestamp updates
+- [x] Test API error handling and graceful degradation
+- [x] Test localStorage user not found -> new user creation
+- [x] Test network error handling
+
+---
+
+## 2. User Interface Features
+
+### 2.1 Navigation and Tab System
+**Description**: Main navigation between app sections
+**Components**: `App.jsx` (tab navigation)
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test tab switching between Feed, Rooms, Boost, Journal
+- [ ] Test active tab styling and visual feedback
+- [ ] Test tab visibility states (hidden when viewing profile)
+- [ ] Test tab content rendering correctly
+- [ ] Test tab state persistence during navigation
+
+---
+
+### 2.2 Profile Management Interface
+**Description**: User profile viewing and editing
+**Components**: `UserProfile.jsx`, API: `PATCH /api/users/:id`
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test profile information display (avatar, username, current mood)
+- [ ] Test edit mode activation/deactivation
+- [ ] Test status update functionality and persistence
+- [ ] Test avatar URL update functionality
+- [ ] Test save/cancel operations
+- [ ] Test profile button click toggles profile view
+
+---
+
+### 2.3 Layout and Design System
+**Description**: Glassmorphism UI with gradient backgrounds
+**Components**: `Layout.jsx`, Tailwind CSS classes
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test layout structure and component hierarchy
+- [ ] Test responsive behavior on different screen sizes
+- [ ] Test glass-panel styling and consistency
+- [ ] Test animated gradients in background
+- [ ] Test accessibility features and keyboard navigation
+
+---
+
+## 3. Real-time Features
+
+### 3.1 Mood-Based Chat Rooms (Vibe Rooms)
+**Description**: Real-time chat rooms based on current mood
+**Components**: `VibeRoom.jsx`, Socket.io Events, API: `GET /api/messages/:roomId`
+**Database**: `messages` table
+
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test room joining/leaving based on current mood
+- [ ] Test message sending and real-time receiving
+- [ ] Test typing indicators (start/stop events)
+- [ ] Test message history loading and display
+- [ ] Test socket connection handling and reconnection
+- [ ] Test message validation (max 500 chars, sanitization)
+- [ ] Test user avatars in message display
+- [ ] Test message ordering and timestamps
+
+---
+
+### 3.2 Real-time User Matching
+**Description**: Find other users with same mood
+**Components**: `MatchFeed.jsx`, API: `GET /api/users/match/:moodId`
+**Database**: Query by `current_mood_id` and `last_active`
+
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test matching user fetching for current mood
+- [ ] Test user filtering (exclude current user)
+- [ ] Test match count display
+- [ ] Test empty state when no matches found
+- [ ] Test real-time updates when users change moods
+- [ ] Test user card display with avatars and status
+- [ ] Test active time filtering (last 1 hour)
+
+---
+
+## 4. Data Persistence Features
+
+### 4.1 Journal System
+**Description**: Private journal for personal reflections
+**Components**: `Journal.jsx`, API: `GET /api/journal/:userId`, `POST /api/journal`
+**Database**: `journal_entries` table
+
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test journal entry creation and saving
+- [ ] Test entry history loading in reverse chronological order
+- [ ] Test timestamp formatting and display
+- [ ] Test journal entry validation (max 2000 chars)
+- [ ] Test empty state display when no entries
+- [ ] Test entry deletion functionality (if exists)
+- [ ] Test rich text formatting (if exists)
+
+---
+
+### 4.2 Mood History Tracking
+**Description**: Track mood changes over time
+**Components**: Mood tracking APIs, Database: `mood_logs` table
+
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test mood logging on each change
+- [ ] Test mood history retrieval
+- [ ] Test latest mood fetching for user profile
+- [ ] Test timestamp accuracy and storage
+- [ ] Test mood log cleanup/retention (if implemented)
+
+---
+
+### 4.3 Message Persistence
+**Description**: Store chat messages permanently
+**Components**: Message APIs, Database: `messages` table
+
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test message saving to database on send
+- [ ] Test message history retrieval for rooms
+- [ ] Test user association with messages
+- [ ] Test message ordering (chronological)
+- [ ] Test message cross-room isolation
+- [ ] Test message content sanitization
+
+---
+
+## 5. Content Features
+
+### 5.1 Mood Boosters
+**Description**: Inspirational content based on current mood
+**Components**: `MoodBooster.jsx`, Static content arrays
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test content display for each mood (happy, chill, energetic, sad, romantic)
+- [ ] Test quote rendering and formatting
+- [ ] Test GIF display and loading
+- [ ] Test mood-based content filtering
+- [ ] Test content refresh/randomization (if exists)
+- [ ] Test broken GIF handling
+
+---
+
+## 6. Edge Cases and Error Handling
+
+### 6.1 Network Error Handling
+**Description**: Graceful handling of API failures and offline scenarios
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test API failure scenarios (500 errors, network timeout)
+- [ ] Test error message display to user
+- [ ] Test retry mechanisms (if implemented)
+- [ ] Test offline behavior and graceful degradation
+- [ ] Test loading states during API calls
+- [ ] Test partial data handling
+
+---
+
+### 6.2 Input Validation
+**Description**: Server-side and client-side input validation
+**Components**: Server validation functions, Client-side forms
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test username validation (3-30 chars, alphanumeric + underscore/hyphen)
+- [ ] Test mood ID validation (5 predefined values: happy, chill, energetic, sad, romantic)
+- [ ] Test message text validation (max 500 chars)
+- [ ] Test journal text validation (max 2000 chars)
+- [ ] Test user ID validation (positive integer)
+- [ ] Test avatar URL validation (max 500 chars)
+- [ ] Test status validation (max 100 chars)
+- [ ] Test SQL injection prevention
+- [ ] Test XSS prevention in user inputs
+
+---
+
+### 6.3 Database Error Handling
+**Description**: Database operation failures and data integrity
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test database connection failures
+- [ ] Test query execution errors
+- [ ] Test foreign key constraint violations
+- [ ] Test duplicate entry handling
+- [ ] Test migration processes and schema changes
+- [ ] Test data backup and recovery (if implemented)
+
+---
+
+## 7. Configuration and Setup Features
+
+### 7.1 Environment Configuration
+**Description**: Environment variables and configuration management
+**Files**: `.env.example`, `src/config/api.js`, `server/index.js`
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test environment variable loading and defaults
+- [ ] Test API URL configuration changes
+- [ ] Test CORS configuration
+- [ ] Test database path configuration
+- [ ] Test port configuration changes
+- [ ] Test production vs development environments
+
+---
+
+### 7.2 CORS and Security
+**Description**: Security headers and cross-origin resource sharing
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test CORS headers configuration
+- [ ] Test security headers (if implemented)
+- [ ] Test input sanitization against XSS
+- [ ] Test SQL injection prevention
+- [ ] Test rate limiting (if implemented)
+- [ ] Test authentication/authorization (if implemented)
+
+---
+
+## 8. Performance and Scalability Features
+
+### 8.1 Real-time Performance
+**Description**: Socket.io efficiency and connection management
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test concurrent socket connections
+- [ ] Test message delivery speed under load
+- [ ] Test connection recovery after disconnection
+- [ ] Test memory usage with many connections
+- [ ] Test socket event handling efficiency
+
+---
+
+### 8.2 Database Optimization
+**Description**: Query efficiency and data management
+**Test Status**: 🔄 **Currently Being Tested**
+
+**Test Cases**:
+- [ ] Test query performance with large datasets
+- [ ] Test database connection limits
+- [ ] Test data retrieval efficiency
+- [ ] Test indexing effectiveness (if implemented)
+- [ ] Test database file size management
+
+---
+
+## 🚀 Testing Execution Plan
+
+### Phase 1: Core Functionality (Current)
+1. User Management System
+2. Mood Tracking System
+3. Basic Navigation
+
+### Phase 2: User Interface
+4. Profile Management
+5. Layout and Design System
+
+### Phase 3: Real-time Features
+6. Mood-Based Chat Rooms
+7. Real-time User Matching
+
+### Phase 4: Data Persistence
+8. Journal System
+9. Mood History
+10. Message Persistence
+
+### Phase 5: Content Features
+11. Mood Boosters
+
+### Phase 6: Edge Cases
+12. Error Handling
+13. Input Validation
+
+### Phase 7: Configuration & Performance
+14. Environment Setup
+15. Security Features
+16. Performance Optimization
+
+---
+
+## 📊 Progress Tracking
+
+**Total Features**: 16 major feature groups
+**Currently Testing**: Phase 1 - Core Functionality
+**Next Phase**: User Interface Features
+
+**Commands for Testing**:
+```bash
+# Frontend tests
+npm test
+
+# Backend tests  
+cd server && npm test
+
+# Linting
+npm run lint
+
+# Start servers
+npm run dev           # Frontend
+cd server && npm run dev  # Backend
+```
+
+---
+
+*This document will be updated as features are tested and verified.*
