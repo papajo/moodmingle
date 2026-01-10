@@ -49,7 +49,7 @@ const MatchFeed = ({ currentMood }) => {
         setLikedUsers(newLiked);
     };
 
-    const handleChat = (e, userName) => {
+    const handleChat = (e, _userName) => {
         e.stopPropagation();
         // TODO: Navigate to chat tab or open direct message
         // This would be handled by parent component or routing

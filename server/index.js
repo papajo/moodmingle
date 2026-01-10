@@ -6,6 +6,59 @@ import bodyParser from 'body-parser';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 
+// Input validation utilities
+const validateUsername = (username) => {
+    if (!username || typeof username !== 'string') {
+        return { valid: false, error: 'Username is required and must be a string' };
+    }
+    if (username.length < 3 || username.length > 30) {
+        return { valid: false, error: 'Username must be between 3 and 30 characters' };
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
+        return { valid: false, error: 'Username can only contain letters, numbers, underscores, and hyphens' };
+    }
+    return { valid: true, sanitized: username.trim() };
+};
+
+const validateMoodId = (moodId) => {
+    if (!moodId || typeof moodId !== 'string') {
+        return { valid: false, error: 'Mood ID is required and must be a string' };
+    }
+    const validMoods = ['happy', 'chill', 'energetic', 'sad', 'romantic'];
+    if (!validMoods.includes(moodId.toLowerCase())) {
+        return { valid: false, error: 'Invalid mood ID' };
+    }
+    return { valid: true, sanitized: moodId.toLowerCase() };
+};
+
+const validateUserId = (userId) => {
+    const id = parseInt(userId);
+    if (isNaN(id) || id <= 0) {
+        return { valid: false, error: 'Invalid user ID' };
+    }
+    return { valid: true, sanitized: id };
+};
+
+const validateJournalText = (text) => {
+    if (!text || typeof text !== 'string') {
+        return { valid: false, error: 'Journal text is required and must be a string' };
+    }
+    if (text.length > 2000) {
+        return { valid: false, error: 'Journal text cannot exceed 2000 characters' };
+    }
+    return { valid: true, sanitized: text.trim() };
+};
+
+const validateMessageText = (text) => {
+    if (!text || typeof text !== 'string') {
+        return { valid: false, error: 'Message text is required and must be a string' };
+    }
+    if (text.length > 500) {
+        return { valid: false, error: 'Message text cannot exceed 500 characters' };
+    }
+    return { valid: true, sanitized: text.trim() };
+};
+
 export const app = express();
 export const httpServer = createServer(app);
 
@@ -164,28 +217,55 @@ io.on('connection', (socket) => {
     });
 
     socket.on('send_message', (data) => {
-        // Save to DB
+        // Validate input data
         const { roomId, userId, user, text, time } = data;
+        
+        // Validate message text
+        const textValidation = validateMessageText(text);
+        if (!textValidation.valid) {
+            socket.emit('error', { message: textValidation.error });
+            return;
+        }
+        
+        // Validate user ID
+        const userIdValidation = validateUserId(userId);
+        if (!userIdValidation.valid) {
+            socket.emit('error', { message: userIdValidation.error });
+            return;
+        }
+        
+        // Validate room ID (mood)
+        const roomValidation = validateMoodId(roomId);
+        if (!roomValidation.valid) {
+            socket.emit('error', { message: roomValidation.error });
+            return;
+        }
+        
+        const sanitizedText = textValidation.sanitized;
+        const sanitizedUserId = userIdValidation.sanitized;
+        const sanitizedRoomId = roomValidation.sanitized;
+        const sanitizedUser = user ? user.toString().trim().substring(0, 30) : 'Anonymous';
+        
         db.run('INSERT INTO messages (room_id, user_id, user, text, time) VALUES (?, ?, ?, ?, ?)',
-            [roomId, userId, user, text, time],
+            [sanitizedRoomId, sanitizedUserId, sanitizedUser, sanitizedText, time],
             function (err) {
                 if (err) {
                     console.error(err.message);
                     return;
                 }
                 // Get user avatar from database
-                db.get('SELECT avatar FROM users WHERE id = ?', [userId], (err, userRow) => {
+                db.get('SELECT avatar FROM users WHERE id = ?', [sanitizedUserId], (err, userRow) => {
                     const savedMsg = {
                         id: this.lastID,
-                        roomId,
-                        userId,
-                        user,
-                        text,
+                        roomId: sanitizedRoomId,
+                        userId: sanitizedUserId,
+                        user: sanitizedUser,
+                        text: sanitizedText,
                         time,
                         avatar: userRow?.avatar || null
                     };
                     // Broadcast to everyone in the room INCLUDING sender (simplifies frontend state)
-                    io.to(roomId).emit('receive_message', savedMsg);
+                    io.to(sanitizedRoomId).emit('receive_message', savedMsg);
                 });
             }
         );
@@ -205,13 +285,18 @@ io.on('connection', (socket) => {
 // Create or get user
 app.post('/api/users', (req, res) => {
     const { username, avatar } = req.body;
-    if (!username) {
-        res.status(400).json({ error: 'Username is required' });
+    
+    // Validate username
+    const usernameValidation = validateUsername(username);
+    if (!usernameValidation.valid) {
+        res.status(400).json({ error: usernameValidation.error });
         return;
     }
+    
+    const sanitizedUsername = usernameValidation.sanitized;
 
     // Try to find existing user
-    db.get('SELECT * FROM users WHERE username = ?', [username], (err, row) => {
+    db.get('SELECT * FROM users WHERE username = ?', [sanitizedUsername], (err, row) => {
         if (err) {
             res.status(500).json({ error: err.message });
             return;
@@ -224,13 +309,13 @@ app.post('/api/users', (req, res) => {
         } else {
             // Create new user
             db.run('INSERT INTO users (username, avatar, status) VALUES (?, ?, ?)',
-                [username, avatar || `https://i.pravatar.cc/150?u=${username}`, 'Just joined!'],
+                [sanitizedUsername, avatar || `https://i.pravatar.cc/150?u=${sanitizedUsername}`, 'Just joined!'],
                 function (err) {
                     if (err) {
                         res.status(500).json({ error: err.message });
                         return;
                     }
-                    res.json({ id: this.lastID, username, avatar: avatar || `https://i.pravatar.cc/150?u=${username}`, status: 'Just joined!', currentMoodId: null });
+                    res.json({ id: this.lastID, username: sanitizedUsername, avatar: avatar || `https://i.pravatar.cc/150?u=${sanitizedUsername}`, status: 'Just joined!', currentMoodId: null });
                 }
             );
         }
@@ -240,7 +325,17 @@ app.post('/api/users', (req, res) => {
 // Get user by ID
 app.get('/api/users/:id', (req, res) => {
     const { id } = req.params;
-    db.get('SELECT * FROM users WHERE id = ?', [id], (err, row) => {
+    
+    // Validate user ID
+    const userIdValidation = validateUserId(id);
+    if (!userIdValidation.valid) {
+        res.status(400).json({ error: userIdValidation.error });
+        return;
+    }
+    
+    const sanitizedId = userIdValidation.sanitized;
+    
+    db.get('SELECT * FROM users WHERE id = ?', [sanitizedId], (err, row) => {
         if (err) {
             res.status(500).json({ error: err.message });
             return;
@@ -263,16 +358,33 @@ app.get('/api/users/:id', (req, res) => {
 app.patch('/api/users/:id', (req, res) => {
     const { id } = req.params;
     const { status, avatar } = req.body;
+    
+    // Validate user ID
+    const userIdValidation = validateUserId(id);
+    if (!userIdValidation.valid) {
+        res.status(400).json({ error: userIdValidation.error });
+        return;
+    }
+    
+    // const sanitizedId = userIdValidation.sanitized; // Not used but validation is performed
     const updates = [];
     const values = [];
 
     if (status !== undefined) {
+        if (typeof status !== 'string' || status.length > 100) {
+            res.status(400).json({ error: 'Status must be a string with max 100 characters' });
+            return;
+        }
         updates.push('status = ?');
-        values.push(status);
+        values.push(status.trim());
     }
     if (avatar !== undefined) {
+        if (typeof avatar !== 'string' || avatar.length > 500) {
+            res.status(400).json({ error: 'Avatar must be a string with max 500 characters' });
+            return;
+        }
         updates.push('avatar = ?');
-        values.push(avatar);
+        values.push(avatar.trim());
     }
 
     if (updates.length === 0) {
@@ -293,11 +405,20 @@ app.patch('/api/users/:id', (req, res) => {
 // Get users matching current mood
 app.get('/api/users/match/:moodId', (req, res) => {
     const { moodId } = req.params;
+    
+    // Validate mood ID
+    const moodValidation = validateMoodId(moodId);
+    if (!moodValidation.valid) {
+        res.status(400).json({ error: moodValidation.error });
+        return;
+    }
+    
+    const sanitizedMoodId = moodValidation.sanitized;
     db.all(`SELECT id, username, avatar, status, current_mood_id 
             FROM users 
             WHERE current_mood_id = ? AND last_active > datetime('now', '-1 hour')
             ORDER BY last_active DESC
-            LIMIT 20`, [moodId], (err, rows) => {
+            LIMIT 20`, [sanitizedMoodId], (err, rows) => {
         if (err) {
             res.status(500).json({ error: err.message });
             return;
@@ -316,7 +437,17 @@ app.get('/api/users/match/:moodId', (req, res) => {
 // Get latest mood for a user
 app.get('/api/mood/:userId', (req, res) => {
     const { userId } = req.params;
-    db.get('SELECT * FROM mood_logs WHERE user_id = ? ORDER BY id DESC LIMIT 1', [userId], (err, row) => {
+    
+    // Validate user ID
+    const userIdValidation = validateUserId(userId);
+    if (!userIdValidation.valid) {
+        res.status(400).json({ error: userIdValidation.error });
+        return;
+    }
+    
+    const sanitizedUserId = userIdValidation.sanitized;
+    
+    db.get('SELECT * FROM mood_logs WHERE user_id = ? ORDER BY id DESC LIMIT 1', [sanitizedUserId], (err, row) => {
         if (err) {
             res.status(500).json({ error: err.message });
             return;
@@ -328,37 +459,55 @@ app.get('/api/mood/:userId', (req, res) => {
 // Set mood for a user
 app.post('/api/mood', (req, res) => {
     const { userId, moodId } = req.body;
-    if (!moodId) {
-        res.status(400).json({ error: 'Mood ID is required' });
+    
+    // Validate inputs
+    const userIdValidation = validateUserId(userId);
+    if (!userIdValidation.valid) {
+        res.status(400).json({ error: userIdValidation.error });
         return;
     }
-    if (!userId) {
-        res.status(400).json({ error: 'User ID is required' });
+    
+    const moodValidation = validateMoodId(moodId);
+    if (!moodValidation.valid) {
+        res.status(400).json({ error: moodValidation.error });
         return;
     }
+    
+    const sanitizedUserId = userIdValidation.sanitized;
+    const sanitizedMoodId = moodValidation.sanitized;
 
     // Update user's current mood
-    db.run('UPDATE users SET current_mood_id = ?, last_active = CURRENT_TIMESTAMP WHERE id = ?', [moodId, userId], (err) => {
+    db.run('UPDATE users SET current_mood_id = ?, last_active = CURRENT_TIMESTAMP WHERE id = ?', [sanitizedMoodId, sanitizedUserId], (err) => {
         if (err) {
             res.status(500).json({ error: err.message });
             return;
         }
     });
 
-    // Log mood change
-    db.run('INSERT INTO mood_logs (user_id, mood_id) VALUES (?, ?)', [userId, moodId], function (err) {
+// Log mood change
+    db.run('INSERT INTO mood_logs (user_id, mood_id) VALUES (?, ?)', [sanitizedUserId, sanitizedMoodId], function (err) {
         if (err) {
             res.status(500).json({ error: err.message });
             return;
         }
-        res.json({ id: this.lastID, userId, moodId });
+        res.json({ id: this.lastID, userId: sanitizedUserId, moodId: sanitizedMoodId });
     });
 });
 
 // Get journal entries for a user
 app.get('/api/journal/:userId', (req, res) => {
     const { userId } = req.params;
-    db.all('SELECT * FROM journal_entries WHERE user_id = ? ORDER BY id DESC', [userId], (err, rows) => {
+    
+    // Validate user ID
+    const userIdValidation = validateUserId(userId);
+    if (!userIdValidation.valid) {
+        res.status(400).json({ error: userIdValidation.error });
+        return;
+    }
+    
+    const sanitizedUserId = userIdValidation.sanitized;
+    
+    db.all('SELECT * FROM journal_entries WHERE user_id = ? ORDER BY id DESC', [sanitizedUserId], (err, rows) => {
         if (err) {
             res.status(500).json({ error: err.message });
             return;
@@ -370,11 +519,22 @@ app.get('/api/journal/:userId', (req, res) => {
 // Save journal entry
 app.post('/api/journal', (req, res) => {
     const { userId, text, date, time } = req.body;
-    if (!userId) {
-        res.status(400).json({ error: 'User ID is required' });
+    // Validate inputs
+    const userIdValidation = validateUserId(userId);
+    if (!userIdValidation.valid) {
+        res.status(400).json({ error: userIdValidation.error });
         return;
     }
-    db.run('INSERT INTO journal_entries (user_id, text, date, time) VALUES (?, ?, ?, ?)', [userId, text, date, time], function (err) {
+    
+    const textValidation = validateJournalText(text);
+    if (!textValidation.valid) {
+        res.status(400).json({ error: textValidation.error });
+        return;
+    }
+    
+    const sanitizedUserId = userIdValidation.sanitized;
+    const sanitizedText = textValidation.sanitized;
+    db.run('INSERT INTO journal_entries (user_id, text, date, time) VALUES (?, ?, ?, ?)', [sanitizedUserId, sanitizedText, date, time], function (err) {
         if (err) {
             res.status(500).json({ error: err.message });
             return;
