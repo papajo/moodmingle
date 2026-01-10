@@ -1,10 +1,10 @@
 import 'dotenv/config';
 import express from 'express';
-import sqlite3 from 'sqlite3';
 import cors from 'cors';
 import bodyParser from 'body-parser';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import db from './db.js';
 
 // Input validation utilities
 const validateUsername = (username) => {
@@ -64,7 +64,6 @@ export const httpServer = createServer(app);
 
 const port = process.env.PORT || 3001;
 const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-const dbPath = process.env.DB_PATH || './moodmingle.db';
 
 const io = new Server(httpServer, {
     cors: {
@@ -82,108 +81,50 @@ app.use(cors({
 }));
 app.use(bodyParser.json());
 
-// Database Setup
-const db = new sqlite3.Database(dbPath, (err) => {
-    if (err) {
-        console.error('Error opening database', err.message);
-    } else {
-        console.log('Connected to the SQLite database.');
-        initializeTables();
+// Initialize Database
+(async () => {
+    try {
+        await db.query(`CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(255) UNIQUE NOT NULL,
+            avatar TEXT,
+            status TEXT,
+            current_mood_id VARCHAR(50),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`);
+
+        await db.query(`CREATE TABLE IF NOT EXISTS mood_logs (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id),
+            mood_id VARCHAR(50),
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`);
+
+        await db.query(`CREATE TABLE IF NOT EXISTS journal_entries (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id),
+            text TEXT,
+            date VARCHAR(50),
+            time VARCHAR(50),
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`);
+
+        await db.query(`CREATE TABLE IF NOT EXISTS messages (
+            id SERIAL PRIMARY KEY,
+            room_id VARCHAR(50),
+            user_id INTEGER REFERENCES users(id),
+            "user" VARCHAR(255),
+            text TEXT,
+            time VARCHAR(50),
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`);
+
+        console.log('Database tables initialized');
+    } catch (err) {
+        console.error('Error initializing database:', err);
     }
-});
-
-function initializeTables() {
-    db.serialize(() => {
-        // Users Table
-        db.run(`CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
-      avatar TEXT,
-      status TEXT,
-      current_mood_id TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      last_active DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-        // Mood Logs (now with user_id)
-        db.run(`CREATE TABLE IF NOT EXISTS mood_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      mood_id TEXT,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )`);
-
-        // Journal Entries (now with user_id)
-        db.run(`CREATE TABLE IF NOT EXISTS journal_entries (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      text TEXT,
-      date TEXT,
-      time TEXT,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )`);
-
-        // Messages (for Vibe Rooms) - now with user_id
-        db.run(`CREATE TABLE IF NOT EXISTS messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      room_id TEXT,
-      user_id INTEGER,
-      user TEXT,
-      text TEXT,
-      time TEXT,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )`);
-
-        // Migration: Add user_id columns if they don't exist
-        db.all(`PRAGMA table_info(mood_logs)`, (err, rows) => {
-            if (!err && rows) {
-                const hasUserId = rows.some(row => row.name === 'user_id');
-                if (!hasUserId) {
-                    db.run(`ALTER TABLE mood_logs ADD COLUMN user_id INTEGER`, (alterErr) => {
-                        if (alterErr) {
-                            console.log('Migration note (mood_logs):', alterErr.message);
-                        } else {
-                            console.log('✓ Added user_id column to mood_logs');
-                        }
-                    });
-                }
-            }
-        });
-
-        db.all(`PRAGMA table_info(journal_entries)`, (err, rows) => {
-            if (!err && rows) {
-                const hasUserId = rows.some(row => row.name === 'user_id');
-                if (!hasUserId) {
-                    db.run(`ALTER TABLE journal_entries ADD COLUMN user_id INTEGER`, (alterErr) => {
-                        if (alterErr) {
-                            console.log('Migration note (journal_entries):', alterErr.message);
-                        } else {
-                            console.log('✓ Added user_id column to journal_entries');
-                        }
-                    });
-                }
-            }
-        });
-
-        db.all(`PRAGMA table_info(messages)`, (err, rows) => {
-            if (!err && rows) {
-                const hasUserId = rows.some(row => row.name === 'user_id');
-                if (!hasUserId) {
-                    db.run(`ALTER TABLE messages ADD COLUMN user_id INTEGER`, (alterErr) => {
-                        if (alterErr) {
-                            console.log('Migration note (messages):', alterErr.message);
-                        } else {
-                            console.log('✓ Added user_id column to messages');
-                        }
-                    });
-                }
-            }
-        });
-    });
-}
+})();
 
 // Socket.io Connection
 io.on('connection', (socket) => {
@@ -216,59 +157,63 @@ io.on('connection', (socket) => {
         socket.to(roomId).emit('user_stopped_typing', { userId });
     });
 
-    socket.on('send_message', (data) => {
-        // Validate input data
-        const { roomId, userId, user, text, time } = data;
-        
-        // Validate message text
-        const textValidation = validateMessageText(text);
-        if (!textValidation.valid) {
-            socket.emit('error', { message: textValidation.error });
-            return;
-        }
-        
-        // Validate user ID
-        const userIdValidation = validateUserId(userId);
-        if (!userIdValidation.valid) {
-            socket.emit('error', { message: userIdValidation.error });
-            return;
-        }
-        
-        // Validate room ID (mood)
-        const roomValidation = validateMoodId(roomId);
-        if (!roomValidation.valid) {
-            socket.emit('error', { message: roomValidation.error });
-            return;
-        }
-        
-        const sanitizedText = textValidation.sanitized;
-        const sanitizedUserId = userIdValidation.sanitized;
-        const sanitizedRoomId = roomValidation.sanitized;
-        const sanitizedUser = user ? user.toString().trim().substring(0, 30) : 'Anonymous';
-        
-        db.run('INSERT INTO messages (room_id, user_id, user, text, time) VALUES (?, ?, ?, ?, ?)',
-            [sanitizedRoomId, sanitizedUserId, sanitizedUser, sanitizedText, time],
-            function (err) {
-                if (err) {
-                    console.error(err.message);
-                    return;
-                }
-                // Get user avatar from database
-                db.get('SELECT avatar FROM users WHERE id = ?', [sanitizedUserId], (err, userRow) => {
-                    const savedMsg = {
-                        id: this.lastID,
-                        roomId: sanitizedRoomId,
-                        userId: sanitizedUserId,
-                        user: sanitizedUser,
-                        text: sanitizedText,
-                        time,
-                        avatar: userRow?.avatar || null
-                    };
-                    // Broadcast to everyone in the room INCLUDING sender (simplifies frontend state)
-                    io.to(sanitizedRoomId).emit('receive_message', savedMsg);
-                });
+    socket.on('send_message', async (data) => {
+        try {
+            // Validate input data
+            const { roomId, userId, user, text, time } = data;
+
+            // Validate message text
+            const textValidation = validateMessageText(text);
+            if (!textValidation.valid) {
+                socket.emit('error', { message: textValidation.error });
+                return;
             }
-        );
+
+            // Validate user ID
+            const userIdValidation = validateUserId(userId);
+            if (!userIdValidation.valid) {
+                socket.emit('error', { message: userIdValidation.error });
+                return;
+            }
+
+            // Validate room ID (mood)
+            const roomValidation = validateMoodId(roomId);
+            if (!roomValidation.valid) {
+                socket.emit('error', { message: roomValidation.error });
+                return;
+            }
+
+            const sanitizedText = textValidation.sanitized;
+            const sanitizedUserId = userIdValidation.sanitized;
+            const sanitizedRoomId = roomValidation.sanitized;
+            const sanitizedUser = user ? user.toString().trim().substring(0, 30) : 'Anonymous';
+
+            const { rows: savedMsgRows } = await db.query(
+                'INSERT INTO messages (room_id, user_id, "user", text, time) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+                [sanitizedRoomId, sanitizedUserId, sanitizedUser, sanitizedText, time]
+            );
+
+            const messageId = savedMsgRows[0].id;
+
+            // Get user avatar from database
+            const { rows: userRows } = await db.query('SELECT avatar FROM users WHERE id = $1', [sanitizedUserId]);
+            const userRow = userRows[0];
+
+            const savedMsg = {
+                id: messageId,
+                roomId: sanitizedRoomId,
+                userId: sanitizedUserId,
+                user: sanitizedUser,
+                text: sanitizedText,
+                time,
+                avatar: userRow?.avatar || null
+            };
+            // Broadcast to everyone in the room INCLUDING sender (simplifies frontend state)
+            io.to(sanitizedRoomId).emit('receive_message', savedMsg);
+        } catch (err) {
+            console.error('Socket error:', err.message);
+            socket.emit('error', { message: 'Failed to send message' });
+        }
     });
 
     socket.on('disconnect', () => {
@@ -283,63 +228,58 @@ io.on('connection', (socket) => {
 
 // User Management
 // Create or get user
-app.post('/api/users', (req, res) => {
-    const { username, avatar } = req.body;
-    
-    // Validate username
-    const usernameValidation = validateUsername(username);
-    if (!usernameValidation.valid) {
-        res.status(400).json({ error: usernameValidation.error });
-        return;
-    }
-    
-    const sanitizedUsername = usernameValidation.sanitized;
+app.post('/api/users', async (req, res) => {
+    try {
+        const { username, avatar } = req.body;
 
-    // Try to find existing user
-    db.get('SELECT * FROM users WHERE username = ?', [sanitizedUsername], (err, row) => {
-        if (err) {
-            res.status(500).json({ error: err.message });
+        // Validate username
+        const usernameValidation = validateUsername(username);
+        if (!usernameValidation.valid) {
+            res.status(400).json({ error: usernameValidation.error });
             return;
         }
+
+        const sanitizedUsername = usernameValidation.sanitized;
+
+        // Try to find existing user
+        const { rows } = await db.query('SELECT * FROM users WHERE username = $1', [sanitizedUsername]);
+        const row = rows[0];
 
         if (row) {
             // Update last_active
-            db.run('UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = ?', [row.id]);
+            await db.query('UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = $1', [row.id]);
             res.json({ id: row.id, username: row.username, avatar: row.avatar, status: row.status, currentMoodId: row.current_mood_id });
         } else {
             // Create new user
-            db.run('INSERT INTO users (username, avatar, status) VALUES (?, ?, ?)',
-                [sanitizedUsername, avatar || `https://i.pravatar.cc/150?u=${sanitizedUsername}`, 'Just joined!'],
-                function (err) {
-                    if (err) {
-                        res.status(500).json({ error: err.message });
-                        return;
-                    }
-                    res.json({ id: this.lastID, username: sanitizedUsername, avatar: avatar || `https://i.pravatar.cc/150?u=${sanitizedUsername}`, status: 'Just joined!', currentMoodId: null });
-                }
+            const defaultAvatar = avatar || `https://i.pravatar.cc/150?u=${sanitizedUsername}`;
+            const { rows: newRows } = await db.query(
+                'INSERT INTO users (username, avatar, status) VALUES ($1, $2, $3) RETURNING id',
+                [sanitizedUsername, defaultAvatar, 'Just joined!']
             );
+            res.json({ id: newRows[0].id, username: sanitizedUsername, avatar: defaultAvatar, status: 'Just joined!', currentMoodId: null });
         }
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // Get user by ID
-app.get('/api/users/:id', (req, res) => {
-    const { id } = req.params;
-    
-    // Validate user ID
-    const userIdValidation = validateUserId(id);
-    if (!userIdValidation.valid) {
-        res.status(400).json({ error: userIdValidation.error });
-        return;
-    }
-    
-    const sanitizedId = userIdValidation.sanitized;
-    
-    db.get('SELECT * FROM users WHERE id = ?', [sanitizedId], (err, row) => {
-        if (err) {
-            res.status(500).json({ error: err.message });
+app.get('/api/users/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Validate user ID
+        const userIdValidation = validateUserId(id);
+        if (!userIdValidation.valid) {
+            res.status(400).json({ error: userIdValidation.error });
             return;
         }
+
+        const sanitizedId = userIdValidation.sanitized;
+
+        const { rows } = await db.query('SELECT * FROM users WHERE id = $1', [sanitizedId]);
+        const row = rows[0];
+
         if (!row) {
             res.status(404).json({ error: 'User not found' });
             return;
@@ -351,78 +291,80 @@ app.get('/api/users/:id', (req, res) => {
             status: row.status,
             currentMoodId: row.current_mood_id
         });
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // Update user status
-app.patch('/api/users/:id', (req, res) => {
-    const { id } = req.params;
-    const { status, avatar } = req.body;
-    
-    // Validate user ID
-    const userIdValidation = validateUserId(id);
-    if (!userIdValidation.valid) {
-        res.status(400).json({ error: userIdValidation.error });
-        return;
-    }
-    
-    // const sanitizedId = userIdValidation.sanitized; // Not used but validation is performed
-    const updates = [];
-    const values = [];
+app.patch('/api/users/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status, avatar } = req.body;
 
-    if (status !== undefined) {
-        if (typeof status !== 'string' || status.length > 100) {
-            res.status(400).json({ error: 'Status must be a string with max 100 characters' });
+        // Validate user ID
+        const userIdValidation = validateUserId(id);
+        if (!userIdValidation.valid) {
+            res.status(400).json({ error: userIdValidation.error });
             return;
         }
-        updates.push('status = ?');
-        values.push(status.trim());
-    }
-    if (avatar !== undefined) {
-        if (typeof avatar !== 'string' || avatar.length > 500) {
-            res.status(400).json({ error: 'Avatar must be a string with max 500 characters' });
+
+        const updates = [];
+        const values = [];
+        let paramIndex = 1;
+
+        if (status !== undefined) {
+            if (typeof status !== 'string' || status.length > 100) {
+                res.status(400).json({ error: 'Status must be a string with max 100 characters' });
+                return;
+            }
+            updates.push(`status = $${paramIndex++}`);
+            values.push(status.trim());
+        }
+        if (avatar !== undefined) {
+            if (typeof avatar !== 'string' || avatar.length > 500) {
+                res.status(400).json({ error: 'Avatar must be a string with max 500 characters' });
+                return;
+            }
+            updates.push(`avatar = $${paramIndex++}`);
+            values.push(avatar.trim());
+        }
+
+        if (updates.length === 0) {
+            res.status(400).json({ error: 'No fields to update' });
             return;
         }
-        updates.push('avatar = ?');
-        values.push(avatar.trim());
-    }
 
-    if (updates.length === 0) {
-        res.status(400).json({ error: 'No fields to update' });
-        return;
-    }
-
-    values.push(id);
-    db.run(`UPDATE users SET ${updates.join(', ')}, last_active = CURRENT_TIMESTAMP WHERE id = ?`, values, function (err) {
-        if (err) {
-            res.status(500).json({ error: err.message });
-            return;
-        }
+        values.push(id);
+        await db.query(`UPDATE users SET ${updates.join(', ')}, last_active = CURRENT_TIMESTAMP WHERE id = $${paramIndex}`, values);
         res.json({ success: true });
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // Get users matching current mood
-app.get('/api/users/match/:moodId', (req, res) => {
-    const { moodId } = req.params;
-    
-    // Validate mood ID
-    const moodValidation = validateMoodId(moodId);
-    if (!moodValidation.valid) {
-        res.status(400).json({ error: moodValidation.error });
-        return;
-    }
-    
-    const sanitizedMoodId = moodValidation.sanitized;
-    db.all(`SELECT id, username, avatar, status, current_mood_id 
-            FROM users 
-            WHERE current_mood_id = ? AND last_active > datetime('now', '-1 hour')
-            ORDER BY last_active DESC
-            LIMIT 20`, [sanitizedMoodId], (err, rows) => {
-        if (err) {
-            res.status(500).json({ error: err.message });
+app.get('/api/users/match/:moodId', async (req, res) => {
+    try {
+        const { moodId } = req.params;
+
+        // Validate mood ID
+        const moodValidation = validateMoodId(moodId);
+        if (!moodValidation.valid) {
+            res.status(400).json({ error: moodValidation.error });
             return;
         }
+
+        const sanitizedMoodId = moodValidation.sanitized;
+
+        // Note: interval syntax differs in Postgres
+        const { rows } = await db.query(`
+            SELECT id, username, avatar, status, current_mood_id 
+            FROM users 
+            WHERE current_mood_id = $1 AND last_active > NOW() - INTERVAL '1 hour'
+            ORDER BY last_active DESC
+            LIMIT 20`, [sanitizedMoodId]);
+
         const users = rows.map(row => ({
             id: row.id,
             name: row.username,
@@ -431,130 +373,128 @@ app.get('/api/users/match/:moodId', (req, res) => {
             moodId: row.current_mood_id
         }));
         res.json(users);
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // Get latest mood for a user
-app.get('/api/mood/:userId', (req, res) => {
-    const { userId } = req.params;
-    
-    // Validate user ID
-    const userIdValidation = validateUserId(userId);
-    if (!userIdValidation.valid) {
-        res.status(400).json({ error: userIdValidation.error });
-        return;
-    }
-    
-    const sanitizedUserId = userIdValidation.sanitized;
-    
-    db.get('SELECT * FROM mood_logs WHERE user_id = ? ORDER BY id DESC LIMIT 1', [sanitizedUserId], (err, row) => {
-        if (err) {
-            res.status(500).json({ error: err.message });
+app.get('/api/mood/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        // Validate user ID
+        const userIdValidation = validateUserId(userId);
+        if (!userIdValidation.valid) {
+            res.status(400).json({ error: userIdValidation.error });
             return;
         }
+
+        const sanitizedUserId = userIdValidation.sanitized;
+
+        const { rows } = await db.query('SELECT * FROM mood_logs WHERE user_id = $1 ORDER BY id DESC LIMIT 1', [sanitizedUserId]);
+        const row = rows[0];
         res.json(row ? { id: row.mood_id } : null);
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // Set mood for a user
-app.post('/api/mood', (req, res) => {
-    const { userId, moodId } = req.body;
-    
-    // Validate inputs
-    const userIdValidation = validateUserId(userId);
-    if (!userIdValidation.valid) {
-        res.status(400).json({ error: userIdValidation.error });
-        return;
-    }
-    
-    const moodValidation = validateMoodId(moodId);
-    if (!moodValidation.valid) {
-        res.status(400).json({ error: moodValidation.error });
-        return;
-    }
-    
-    const sanitizedUserId = userIdValidation.sanitized;
-    const sanitizedMoodId = moodValidation.sanitized;
+app.post('/api/mood', async (req, res) => {
+    try {
+        const { userId, moodId } = req.body;
 
-    // Update user's current mood
-    db.run('UPDATE users SET current_mood_id = ?, last_active = CURRENT_TIMESTAMP WHERE id = ?', [sanitizedMoodId, sanitizedUserId], (err) => {
-        if (err) {
-            res.status(500).json({ error: err.message });
+        // Validate inputs
+        const userIdValidation = validateUserId(userId);
+        if (!userIdValidation.valid) {
+            res.status(400).json({ error: userIdValidation.error });
             return;
         }
-    });
 
-// Log mood change
-    db.run('INSERT INTO mood_logs (user_id, mood_id) VALUES (?, ?)', [sanitizedUserId, sanitizedMoodId], function (err) {
-        if (err) {
-            res.status(500).json({ error: err.message });
+        const moodValidation = validateMoodId(moodId);
+        if (!moodValidation.valid) {
+            res.status(400).json({ error: moodValidation.error });
             return;
         }
-        res.json({ id: this.lastID, userId: sanitizedUserId, moodId: sanitizedMoodId });
-    });
+
+        const sanitizedUserId = userIdValidation.sanitized;
+        const sanitizedMoodId = moodValidation.sanitized;
+
+        // Update user's current mood
+        await db.query('UPDATE users SET current_mood_id = $1, last_active = CURRENT_TIMESTAMP WHERE id = $2', [sanitizedMoodId, sanitizedUserId]);
+
+        // Log mood change
+        const { rows } = await db.query('INSERT INTO mood_logs (user_id, mood_id) VALUES ($1, $2) RETURNING id', [sanitizedUserId, sanitizedMoodId]);
+
+        res.json({ id: rows[0].id, userId: sanitizedUserId, moodId: sanitizedMoodId });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // Get journal entries for a user
-app.get('/api/journal/:userId', (req, res) => {
-    const { userId } = req.params;
-    
-    // Validate user ID
-    const userIdValidation = validateUserId(userId);
-    if (!userIdValidation.valid) {
-        res.status(400).json({ error: userIdValidation.error });
-        return;
-    }
-    
-    const sanitizedUserId = userIdValidation.sanitized;
-    
-    db.all('SELECT * FROM journal_entries WHERE user_id = ? ORDER BY id DESC', [sanitizedUserId], (err, rows) => {
-        if (err) {
-            res.status(500).json({ error: err.message });
+app.get('/api/journal/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        // Validate user ID
+        const userIdValidation = validateUserId(userId);
+        if (!userIdValidation.valid) {
+            res.status(400).json({ error: userIdValidation.error });
             return;
         }
+
+        const sanitizedUserId = userIdValidation.sanitized;
+
+        const { rows } = await db.query('SELECT * FROM journal_entries WHERE user_id = $1 ORDER BY id DESC', [sanitizedUserId]);
         res.json(rows);
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // Save journal entry
-app.post('/api/journal', (req, res) => {
-    const { userId, text, date, time } = req.body;
-    // Validate inputs
-    const userIdValidation = validateUserId(userId);
-    if (!userIdValidation.valid) {
-        res.status(400).json({ error: userIdValidation.error });
-        return;
-    }
-    
-    const textValidation = validateJournalText(text);
-    if (!textValidation.valid) {
-        res.status(400).json({ error: textValidation.error });
-        return;
-    }
-    
-    const sanitizedUserId = userIdValidation.sanitized;
-    const sanitizedText = textValidation.sanitized;
-    db.run('INSERT INTO journal_entries (user_id, text, date, time) VALUES (?, ?, ?, ?)', [sanitizedUserId, sanitizedText, date, time], function (err) {
-        if (err) {
-            res.status(500).json({ error: err.message });
+app.post('/api/journal', async (req, res) => {
+    try {
+        const { userId, text, date, time } = req.body;
+        // Validate inputs
+        const userIdValidation = validateUserId(userId);
+        if (!userIdValidation.valid) {
+            res.status(400).json({ error: userIdValidation.error });
             return;
         }
-        res.json({ id: this.lastID, userId, text, date, time });
-    });
+
+        const textValidation = validateJournalText(text);
+        if (!textValidation.valid) {
+            res.status(400).json({ error: textValidation.error });
+            return;
+        }
+
+        const sanitizedUserId = userIdValidation.sanitized;
+        const sanitizedText = textValidation.sanitized;
+
+        const { rows } = await db.query(
+            'INSERT INTO journal_entries (user_id, text, date, time) VALUES ($1, $2, $3, $4) RETURNING id',
+            [sanitizedUserId, sanitizedText, date, time]
+        );
+        res.json({ id: rows[0].id, userId, text, date, time });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // Get messages for a room (History)
-app.get('/api/messages/:roomId', (req, res) => {
-    const { roomId } = req.params;
-    db.all(`SELECT m.*, u.avatar 
+app.get('/api/messages/:roomId', async (req, res) => {
+    try {
+        const { roomId } = req.params;
+        const { rows } = await db.query(`
+            SELECT m.*, u.avatar 
             FROM messages m 
             LEFT JOIN users u ON m.user_id = u.id 
-            WHERE m.room_id = ? 
-            ORDER BY m.id ASC`, [roomId], (err, rows) => {
-        if (err) {
-            res.status(500).json({ error: err.message });
-            return;
-        }
+            WHERE m.room_id = $1 
+            ORDER BY m.id ASC`, [roomId]);
+
         // Transform snake_case to camelCase for frontend
         const messages = rows.map(row => ({
             id: row.id,
@@ -565,7 +505,9 @@ app.get('/api/messages/:roomId', (req, res) => {
             avatar: row.avatar
         }));
         res.json(messages);
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // Only start server if run directly
@@ -574,4 +516,3 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
         console.log(`Server running at http://localhost:${port}`);
     });
 }
-
