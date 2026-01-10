@@ -7,7 +7,7 @@ vi.mock('../../contexts/UserContext', () => ({
   useUser: () => ({ user: { id: 123, username: 'TestUser' } })
 }));
 // Mock API base URL
-vi.mock('../../config/api', () => ({ API_URL: 'http://localhost:3001' }));
+vi.mock('../../config/api', () => ({ API_URL: 'http://localhost:3001', SOCKET_URL: 'http://localhost:3001' }));
 
 describe('VibeRoom', () => {
   beforeEach(() => {
