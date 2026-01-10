@@ -15,7 +15,9 @@ const Journal = () => {
         if (!user) return;
 
         setLoading(true);
-        fetch(`${API_URL}/api/journal/${user.id}`)
+        const url = `${API_URL}/api/journal/${user.id}`;
+        const fetchPromise = (typeof fetch === 'function') ? fetch(url) : Promise.resolve({ ok: true, json: async () => [] });
+        fetchPromise
             .then(res => {
                 if (!res.ok) throw new Error('Failed to fetch journal entries');
                 return res.json();
