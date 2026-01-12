@@ -20,33 +20,77 @@ function AppContent() {
 
     // Fetch initial mood from server
     useEffect(() => {
-        if (!user) return;
+        if (!user) {
+            console.log('No user found, skipping mood fetch');
+            return;
+        }
 
+        console.log('Fetching mood for user:', user.id);
         setMoodLoading(true);
+        
+        const timeout = setTimeout(() => {
+            console.log('Mood fetch timeout - setting loading to false');
+            setMoodLoading(false);
+        }, 5000);
+
         fetch(`${API_URL}/api/mood/${user.id}`)
-            .then(res => res.json())
+            .then(res => {
+                clearTimeout(timeout);
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+                }
+                return res.json();
+            })
             .then(data => {
+                console.log('Mood data received:', data);
                 if (data && data.id) {
                     const mood = findMoodById(data.id);
-                    if (mood) setCurrentMood(mood);
+                    if (mood) {
+                        console.log('Current mood set to:', mood);
+                        setCurrentMood(mood);
+                    } else {
+                        console.log('Unknown mood ID:', data.id);
+                    }
+                } else {
+                    console.log('No mood data found');
                 }
                 setMoodLoading(false);
             })
             .catch(err => {
+                clearTimeout(timeout);
                 console.error("Failed to fetch mood:", err);
                 setMoodLoading(false);
             });
     }, [user]);
 
     const handleMoodChange = (mood) => {
-        if (!user) return;
+        if (!user) {
+            console.log('No user found, cannot change mood');
+            return;
+        }
 
+        console.log('Changing mood to:', mood, 'for user:', user.id);
         setCurrentMood(mood);
+        
         fetch(`${API_URL}/api/mood`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userId: user.id, moodId: mood.id })
-        }).catch(err => console.error("Failed to save mood:", err));
+        })
+        .then(res => {
+            if (!res.ok) {
+                throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+            }
+            return res.json();
+        })
+        .then(data => {
+            console.log('Mood saved successfully:', data);
+        })
+        .catch(err => {
+            console.error("Failed to save mood:", err);
+            // Don't show alert for now - just log
+            // alert('Failed to save mood. Please try again.');
+        });
     };
 
     if (userLoading || moodLoading) {

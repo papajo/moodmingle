@@ -4,7 +4,7 @@ import cors from 'cors';
 import bodyParser from 'body-parser';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import db from './db.js';
+import db, { initializeDatabase } from './db.js';
 
 // Input validation utilities
 const validateUsername = (username) => {
@@ -81,77 +81,73 @@ app.use(cors({
 }));
 app.use(bodyParser.json());
 
-// Initialize Database with Retry Logic
-const initializeDatabase = async (retries = 5, delay = 5000) => {
-    for (let i = 0; i < retries; i++) {
-        try {
-            console.log(`Attempting to connect to database (Attempt ${i + 1}/${retries})...`);
+// Initialize Database with SQLite
+const initializeDatabaseTables = async () => {
+    try {
+        console.log('Initializing SQLite database...');
+        
+        // Remove existing database file for clean start (manual)
+        console.log('Note: Remove moodmingle.db manually for clean database');
+        
+        await initializeDatabase();
 
-            // Define tables
-            await db.query(`CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                username VARCHAR(255) UNIQUE NOT NULL,
-                avatar TEXT,
-                status TEXT,
-                current_mood_id VARCHAR(50),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )`);
+        // Define tables with SQLite syntax
+        await db.query(`CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username VARCHAR(255) UNIQUE NOT NULL,
+            avatar TEXT,
+            status TEXT,
+            current_mood_id VARCHAR(50),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`);
 
-            await db.query(`CREATE TABLE IF NOT EXISTS mood_logs (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER REFERENCES users(id),
-                mood_id VARCHAR(50),
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )`);
+        await db.query(`CREATE TABLE IF NOT EXISTS mood_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            mood_id VARCHAR(50),
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`);
 
-            await db.query(`CREATE TABLE IF NOT EXISTS journal_entries (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER REFERENCES users(id),
-                text TEXT,
-                date VARCHAR(50),
-                time VARCHAR(50),
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )`);
+        await db.query(`CREATE TABLE IF NOT EXISTS journal_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            text TEXT,
+            date VARCHAR(50),
+            time VARCHAR(50),
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`);
 
-            await db.query(`CREATE TABLE IF NOT EXISTS messages (
-                id SERIAL PRIMARY KEY,
-                room_id VARCHAR(50),
-                user_id INTEGER REFERENCES users(id),
-                "user" VARCHAR(255),
-                text TEXT,
-                time VARCHAR(50),
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )`);
+        await db.query(`CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id VARCHAR(50),
+            user_id INTEGER,
+            "user" VARCHAR(255),
+            text TEXT,
+            time VARCHAR(50),
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`);
 
-            await db.query(`CREATE TABLE IF NOT EXISTS reports (
-                id SERIAL PRIMARY KEY,
-                reporter_id INTEGER REFERENCES users(id),
-                reported_id INTEGER REFERENCES users(id),
-                reason TEXT,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )`);
+        await db.query(`CREATE TABLE IF NOT EXISTS reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reporter_id INTEGER,
+            reported_id INTEGER,
+            reason TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )`);
 
-            await db.query(`CREATE TABLE IF NOT EXISTS blocked_users (
-                id SERIAL PRIMARY KEY,
-                blocker_id INTEGER REFERENCES users(id),
-                blocked_id INTEGER REFERENCES users(id),
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(blocker_id, blocked_id)
-            )`);
+        await db.query(`CREATE TABLE IF NOT EXISTS blocked_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            blocker_id INTEGER,
+            blocked_id INTEGER,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(blocker_id, blocked_id)
+        )`);
 
-            console.log('Database tables initialized successfully');
-            return; // Success
-        } catch (err) {
-            console.error(`Database initialization failed: ${err.message}`);
-            if (i < retries - 1) {
-                console.log(`Retrying in ${delay / 1000} seconds...`);
-                await new Promise(resolve => setTimeout(resolve, delay));
-            } else {
-                console.error('Max retries reached. Exiting.');
-                process.exit(1);
-            }
-        }
+        console.log('Database tables initialized successfully');
+    } catch (err) {
+        console.error(`Database initialization failed: ${err.message}`);
+        process.exit(1);
     }
 };
 
@@ -222,15 +218,15 @@ io.on('connection', (socket) => {
             const sanitizedRoomId = roomValidation.sanitized;
             const sanitizedUser = user ? user.toString().trim().substring(0, 30) : 'Anonymous';
 
-            const { rows: savedMsgRows } = await db.query(
-                'INSERT INTO messages (room_id, user_id, "user", text, time) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-                [sanitizedRoomId, sanitizedUserId, sanitizedUser, sanitizedText, time]
-            );
+        const result = await db.query(
+            'INSERT INTO messages (room_id, user_id, "user", text, time) VALUES (?, ?, ?, ?, ?)',
+            [sanitizedRoomId, sanitizedUserId, sanitizedUser, sanitizedText, time]
+        );
 
-            const messageId = savedMsgRows[0].id;
+        const messageId = result.rows[0]?.id;
 
             // Get user avatar from database
-            const { rows: userRows } = await db.query('SELECT avatar FROM users WHERE id = $1', [sanitizedUserId]);
+            const { rows: userRows } = await db.query('SELECT avatar FROM users WHERE id = ?', [sanitizedUserId]);
             const userRow = userRows[0];
 
             const savedMsg = {
@@ -276,21 +272,23 @@ app.post('/api/users', async (req, res) => {
         const sanitizedUsername = usernameValidation.sanitized;
 
         // Try to find existing user
-        const { rows } = await db.query('SELECT * FROM users WHERE username = $1', [sanitizedUsername]);
+        const { rows } = await db.query('SELECT * FROM users WHERE username = ?', [sanitizedUsername]);
         const row = rows[0];
 
         if (row) {
             // Update last_active
-            await db.query('UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = $1', [row.id]);
+            await db.query('UPDATE users SET last_active = CURRENT_TIMESTAMP WHERE id = ?', [row.id]);
             res.json({ id: row.id, username: row.username, avatar: row.avatar, status: row.status, currentMoodId: row.current_mood_id });
         } else {
             // Create new user
             const defaultAvatar = avatar || `https://i.pravatar.cc/150?u=${sanitizedUsername}`;
-            const { rows: newRows } = await db.query(
-                'INSERT INTO users (username, avatar, status) VALUES ($1, $2, $3) RETURNING id',
+            const result = await db.query(
+                'INSERT INTO users (username, avatar, status) VALUES (?, ?, ?)',
                 [sanitizedUsername, defaultAvatar, 'Just joined!']
             );
-            res.json({ id: newRows[0].id, username: sanitizedUsername, avatar: defaultAvatar, status: 'Just joined!', currentMoodId: null });
+            const newId = result.rows[0]?.id;
+            res.json({ id: newId, username: sanitizedUsername, avatar: defaultAvatar, status: 'Just joined!', currentMoodId: null });
+
         }
     } catch (err) {
         console.error('Error creating user:', err);
@@ -312,7 +310,7 @@ app.get('/api/users/:id', async (req, res) => {
 
         const sanitizedId = userIdValidation.sanitized;
 
-        const { rows } = await db.query('SELECT * FROM users WHERE id = $1', [sanitizedId]);
+        const { rows } = await db.query('SELECT * FROM users WHERE id = ?', [sanitizedId]);
         const row = rows[0];
 
         if (!row) {
@@ -371,7 +369,7 @@ app.patch('/api/users/:id', async (req, res) => {
         }
 
         values.push(id);
-        await db.query(`UPDATE users SET ${updates.join(', ')}, last_active = CURRENT_TIMESTAMP WHERE id = $${paramIndex}`, values);
+        await db.query(`UPDATE users SET ${updates.join(', ')}, last_active = CURRENT_TIMESTAMP WHERE id = ?`, [...values, id]);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -392,13 +390,15 @@ app.get('/api/users/match/:moodId', async (req, res) => {
 
         const sanitizedMoodId = moodValidation.sanitized;
 
-        // Note: interval syntax differs in Postgres
+        // Get users with current mood (remove 1-hour filter for testing)
         const { rows } = await db.query(`
             SELECT id, username, avatar, status, current_mood_id 
             FROM users 
-            WHERE current_mood_id = $1 AND last_active > NOW() - INTERVAL '1 hour'
-            ORDER BY last_active DESC
+            WHERE current_mood_id = ?
+            ORDER BY id DESC
             LIMIT 20`, [sanitizedMoodId]);
+
+        console.log(`Debug: Found ${rows.length} users for mood ${sanitizedMoodId}:`, rows.map(r => ({id: r.id, name: r.username})));
 
         const users = rows.map(row => ({
             id: row.id,
@@ -427,7 +427,7 @@ app.get('/api/mood/:userId', async (req, res) => {
 
         const sanitizedUserId = userIdValidation.sanitized;
 
-        const { rows } = await db.query('SELECT * FROM mood_logs WHERE user_id = $1 ORDER BY id DESC LIMIT 1', [sanitizedUserId]);
+        const { rows } = await db.query('SELECT * FROM mood_logs WHERE user_id = ? ORDER BY id DESC LIMIT 1', [sanitizedUserId]);
         const row = rows[0];
         res.json(row ? { id: row.mood_id } : null);
     } catch (err) {
@@ -457,12 +457,18 @@ app.post('/api/mood', async (req, res) => {
         const sanitizedMoodId = moodValidation.sanitized;
 
         // Update user's current mood
-        await db.query('UPDATE users SET current_mood_id = $1, last_active = CURRENT_TIMESTAMP WHERE id = $2', [sanitizedMoodId, sanitizedUserId]);
+        await db.query('UPDATE users SET current_mood_id = ?, last_active = datetime("now") WHERE id = ?', [sanitizedMoodId, sanitizedUserId]);
 
         // Log mood change
-        const { rows } = await db.query('INSERT INTO mood_logs (user_id, mood_id) VALUES ($1, $2) RETURNING id', [sanitizedUserId, sanitizedMoodId]);
+        try {
+            const result = await db.query('INSERT INTO mood_logs (user_id, mood_id) VALUES (?, ?)', [sanitizedUserId, sanitizedMoodId]);
+            const moodLogId = result.rows[0]?.id;
+        } catch (err) {
+            console.error('Failed to log mood change:', err);
+            // Continue without logging mood change
+        }
 
-        res.json({ id: rows[0].id, userId: sanitizedUserId, moodId: sanitizedMoodId });
+        res.json({ id: moodLogId, userId: sanitizedUserId, moodId: sanitizedMoodId });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -482,7 +488,7 @@ app.get('/api/journal/:userId', async (req, res) => {
 
         const sanitizedUserId = userIdValidation.sanitized;
 
-        const { rows } = await db.query('SELECT * FROM journal_entries WHERE user_id = $1 ORDER BY id DESC', [sanitizedUserId]);
+        const { rows } = await db.query('SELECT * FROM journal_entries WHERE user_id = ? ORDER BY id DESC', [sanitizedUserId]);
         res.json(rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -509,11 +515,12 @@ app.post('/api/journal', async (req, res) => {
         const sanitizedUserId = userIdValidation.sanitized;
         const sanitizedText = textValidation.sanitized;
 
-        const { rows } = await db.query(
-            'INSERT INTO journal_entries (user_id, text, date, time) VALUES ($1, $2, $3, $4) RETURNING id',
+        const result = await db.query(
+            'INSERT INTO journal_entries (user_id, text, date, time) VALUES (?, ?, ?, ?)',
             [sanitizedUserId, sanitizedText, date, time]
         );
-        res.json({ id: rows[0].id, userId, text, date, time });
+        const journalId = result.rows[0]?.id;
+        res.json({ id: journalId, userId, text, date, time });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -531,7 +538,7 @@ app.post('/api/report', async (req, res) => {
         }
 
         await db.query(
-            'INSERT INTO reports (reporter_id, reported_id, reason) VALUES ($1, $2, $3)',
+            'INSERT INTO reports (reporter_id, reported_id, reason) VALUES (?, ?, ?)',
             [reporterId, reportedId, reason]
         );
 
@@ -552,7 +559,7 @@ app.post('/api/block', async (req, res) => {
         }
 
         await db.query(
-            'INSERT INTO blocked_users (blocker_id, blocked_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+            'INSERT OR IGNORE INTO blocked_users (blocker_id, blocked_id) VALUES (?, ?)',
             [blockerId, blockedId]
         );
 
@@ -567,7 +574,7 @@ app.get('/api/blocks/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
         const { rows } = await db.query(
-            'SELECT blocked_id FROM blocked_users WHERE blocker_id = $1',
+            'SELECT blocked_id FROM blocked_users WHERE blocker_id = ?',
             [userId]
         );
         res.json(rows.map(r => r.blocked_id));
@@ -584,7 +591,7 @@ app.get('/api/messages/:roomId', async (req, res) => {
             SELECT m.*, u.avatar 
             FROM messages m 
             LEFT JOIN users u ON m.user_id = u.id 
-            WHERE m.room_id = $1 
+            WHERE m.room_id = ? 
             ORDER BY m.id ASC`, [roomId]);
 
         // Transform snake_case to camelCase for frontend
@@ -603,9 +610,8 @@ app.get('/api/messages/:roomId', async (req, res) => {
 });
 
 // Only start server if run directly
-// Only start server if run directly
 if (process.argv[1] === new URL(import.meta.url).pathname) {
-    initializeDatabase().then(() => {
+    initializeDatabaseTables().then(() => {
         httpServer.listen(port, '0.0.0.0', () => {
             console.log(`Server running at http://localhost:${port}`);
         });

@@ -6,7 +6,7 @@ import react from 'eslint-plugin-react'
 
 export default [
   {
-    ignores: ['dist', 'node_modules', 'server/__tests__', 'src/**/__tests__'],
+    ignores: ['dist', 'node_modules', 'server/__tests__', 'src/**/__tests__', 'android/**', 'ios/**'],
   },
   {
     files: ['**/*.{js,jsx}'],

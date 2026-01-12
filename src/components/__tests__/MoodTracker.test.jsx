@@ -27,7 +27,7 @@ describe('MoodTracker', () => {
         render(<MoodTracker currentMood={null} onMoodChange={handleMoodChange} />);
 
         const firstMood = moods[0];
-        const moodButton = screen.getByText(firstMood.label).closest('button');
+        const moodButton = screen.getByText(firstMood.emoji).closest('button');
 
         fireEvent.click(moodButton);
 
@@ -71,10 +71,11 @@ describe('MoodTracker', () => {
     it('should call onMoodChange with correct mood data for each mood', () => {
         render(<MoodTracker currentMood={null} onMoodChange={mockOnMoodChange} />);
 
-        // Test each mood click
-        moods.forEach(mood => {
+        // Test each mood click one at a time
+        moods.forEach((mood, index) => {
             mockOnMoodChange.mockClear();
             
+            // Find button by emoji since it's more specific
             const button = screen.getByText(mood.emoji).closest('button');
             fireEvent.click(button);
 

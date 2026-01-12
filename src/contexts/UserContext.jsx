@@ -21,6 +21,23 @@ export const UserProvider = ({ children }) => {
         initializeUser();
     }, []);
 
+    // Add function to manually switch to a test user
+    const switchToUser = async (userId, username) => {
+        localStorage.setItem('userId', userId);
+        localStorage.setItem('username', username);
+        
+        try {
+            const response = await fetch(`${API_URL}/api/users/${userId}`);
+            if (response.ok) {
+                const userData = await response.json();
+                setUser(userData);
+                setLoading(false);
+            }
+        } catch (err) {
+            console.error('Failed to switch user:', err);
+        }
+    };
+
     const initializeUser = async () => {
         try {
             // Check if user exists in localStorage
@@ -41,6 +58,32 @@ export const UserProvider = ({ children }) => {
                 console.warn(`User ID ${savedUserId} not found. Creating new user.`);
             }
 
+            // Check for full user object in localStorage (from user switcher)
+            const fullUserData = localStorage.getItem('mood mingle-user');
+            if (fullUserData) {
+                try {
+                    const userData = JSON.parse(fullUserData);
+                    // Verify this user still exists on backend
+                    fetch(`${API_URL}/api/users/${userData.id}`)
+                        .then(res => {
+                            if (res.ok) {
+                                setUser(userData);
+                                setLoading(false);
+                                return;
+                            } else {
+                                console.warn(`User ${userData.id} no longer exists, creating new user`);
+                                // Clear invalid user data and continue to auto-create
+                                localStorage.removeItem('mood mingle-user');
+                            }
+                        })
+                        .catch(err => {
+                            console.error('Failed to verify user:', err);
+                        });
+                } catch (e) {
+                    console.warn('Failed to parse user data, creating new user');
+                }
+            }
+
             // Create a new user with a default username
             const username = savedUsername || `User${Math.floor(Math.random() * 10000)}`;
             const response = await fetch(`${API_URL}/api/users`, {
@@ -57,6 +100,7 @@ export const UserProvider = ({ children }) => {
             setUser(userData);
             localStorage.setItem('userId', userData.id);
             localStorage.setItem('username', userData.username);
+            localStorage.setItem('mood mingle-user', JSON.stringify(userData));
             setLoading(false);
         } catch (err) {
             setError(err.message);
@@ -87,7 +131,8 @@ export const UserProvider = ({ children }) => {
         loading,
         error,
         updateUserStatus,
-        refreshUser: initializeUser
+        refreshUser: initializeUser,
+        switchToUser
     };
 
     return <UserContext.Provider value={value}>{children}</UserContext.Provider>;
