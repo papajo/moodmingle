@@ -6,7 +6,7 @@ import { useUser } from '../contexts/UserContext';
 import NotificationPanel from './NotificationPanel';
 
 const NotificationButton = () => {
-    const { unreadCount, addNotification } = useNotifications();
+    const { unreadCount, addNotification, fetchChatRequests } = useNotifications();
     const { user } = useUser();
     const [isOpen, setIsOpen] = useState(false);
     const socketListenersRef = useRef({});
@@ -28,9 +28,13 @@ const NotificationButton = () => {
             addNotification(data);
         };
 
-        const handleChatRequest = (data) => {
+        const handleChatRequest = async (data) => {
             console.log('Chat request received:', data);
             addNotification(data);
+            // Refetch chat requests to ensure UI is up to date
+            if (user?.id) {
+                fetchChatRequests(user.id);
+            }
         };
 
         const handleChatAccepted = (data) => {
@@ -71,7 +75,7 @@ const NotificationButton = () => {
                 window.socket.off(event, handler);
             });
         };
-    }, [user, addNotification]);
+    }, [user, addNotification, fetchChatRequests]);
 
     const toggleNotifications = () => {
         setIsOpen(!isOpen);

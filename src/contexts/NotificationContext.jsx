@@ -167,8 +167,26 @@ export const NotificationProvider = ({ children }) => {
             setNotifications(prev => [notification, ...prev]);
             setUnreadCount(prev => prev + 1);
         } else if (notification.type === 'private_chat_request') {
-            setChatRequests(prev => [notification, ...prev]);
+            // Convert socket notification to chat request format
+            const chatRequest = {
+                id: notification.requestId,
+                requesterId: notification.requesterId,
+                requesterUsername: notification.requesterUsername,
+                requesterAvatar: notification.requesterAvatar || null,
+                createdAt: notification.createdAt || new Date().toISOString()
+            };
+            setChatRequests(prev => {
+                // Check if request already exists to avoid duplicates
+                const exists = prev.some(req => req.id === chatRequest.id);
+                if (exists) return prev;
+                return [chatRequest, ...prev];
+            });
             setUnreadCount(prev => prev + 1);
+            // Also refetch to ensure we have the latest data
+            if (notification.requesterId) {
+                // We don't have userId here, but we can trigger a refetch from the component
+                console.log('Chat request notification received, should refetch requests');
+            }
         }
     }, []);
 
