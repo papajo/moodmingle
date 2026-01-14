@@ -32,10 +32,16 @@ const validateMoodId = (moodId) => {
 };
 
 const validateUserId = (userId) => {
+    console.log('Validating user ID:', userId, 'type:', typeof userId);
     const id = parseInt(userId);
+    console.log('Parsed ID:', id);
+    
     if (isNaN(id) || id <= 0) {
+        console.log('User ID validation failed:', { isNaN: isNaN(id), id: id });
         return { valid: false, error: 'Invalid user ID' };
     }
+    
+    console.log('User ID validation passed:', { valid: true, id: id });
     return { valid: true, sanitized: id };
 };
 
@@ -59,26 +65,59 @@ const validateMessageText = (text) => {
     return { valid: true, sanitized: text.trim() };
 };
 
+const validateHeartNotification = (senderId, receiverId) => {
+    if (!senderId || !receiverId) {
+        return { valid: false, error: 'Both sender and receiver IDs are required' };
+    }
+    if (senderId === receiverId) {
+        return { valid: false, error: 'Cannot send heart to yourself' };
+    }
+    return { valid: true };
+};
+
 export const app = express();
 export const httpServer = createServer(app);
 
 const port = process.env.PORT || 3001;
 const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
 
-const io = new Server(httpServer, {
-    cors: {
-        origin: frontendUrl,
-        methods: ["GET", "POST"],
-        credentials: true
+// CORS configuration - allow localhost and network IPs
+const corsOptions = {
+    origin: function (origin, callback) {
+        // Allow requests with no origin (mobile apps, Postman, etc.)
+        if (!origin) return callback(null, true);
+        
+        // Allow localhost and network IPs
+        const allowedOrigins = [
+            'http://localhost:5173',
+            'http://127.0.0.1:5173',
+            frontendUrl,
+        ];
+        
+        // Check if origin matches allowed patterns
+        const isAllowed = allowedOrigins.includes(origin) ||
+            /^http:\/\/192\.168\.\d+\.\d+:5173$/.test(origin) ||
+            /^http:\/\/10\.\d+\.\d+\.\d+:5173$/.test(origin) ||
+            /^http:\/\/172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+:5173$/.test(origin);
+        
+        if (isAllowed || process.env.NODE_ENV !== 'production') {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
     },
+    credentials: true,
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+};
+
+const io = new Server(httpServer, {
+    cors: corsOptions,
     transports: ['websocket', 'polling']
 });
 
 // Middleware
-app.use(cors({
-    origin: frontendUrl,
-    credentials: true
-}));
+app.use(cors(corsOptions));
 app.use(bodyParser.json());
 
 // Initialize Database with SQLite
@@ -142,6 +181,34 @@ const initializeDatabaseTables = async () => {
             blocked_id INTEGER,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(blocker_id, blocked_id)
+        )`);
+
+        await db.query(`CREATE TABLE IF NOT EXISTS heart_notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender_id INTEGER,
+            receiver_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_read BOOLEAN DEFAULT FALSE,
+            UNIQUE(sender_id, receiver_id)
+        )`);
+
+        await db.query(`CREATE TABLE IF NOT EXISTS private_chat_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            requester_id INTEGER,
+            requested_id INTEGER,
+            status TEXT DEFAULT 'pending', -- 'pending', 'accepted', 'rejected'
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(requester_id, requested_id)
+        )`);
+
+        await db.query(`CREATE TABLE IF NOT EXISTS private_chat_rooms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_name TEXT UNIQUE,
+            user1_id INTEGER,
+            user2_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_active BOOLEAN DEFAULT TRUE
         )`);
 
         console.log('Database tables initialized successfully');
@@ -243,6 +310,72 @@ io.on('connection', (socket) => {
         } catch (err) {
             console.error('Socket error:', err.message);
             socket.emit('error', { message: 'Failed to send message' });
+        }
+    });
+
+    socket.on('send_heart', async (data) => {
+        try {
+            const { senderId, receiverId } = data;
+
+            // Validate user ID
+            const senderValidation = validateUserId(senderId);
+            if (!senderValidation.valid) {
+                socket.emit('error', { message: senderValidation.error });
+                return;
+            }
+
+            const receiverValidation = validateUserId(receiverId);
+            if (!receiverValidation.valid) {
+                socket.emit('error', { message: receiverValidation.error });
+                return;
+            }
+
+            const heartValidation = validateHeartNotification(senderId, receiverId);
+            if (!heartValidation.valid) {
+                socket.emit('error', { message: heartValidation.error });
+                return;
+            }
+
+            const sanitizedSenderId = senderValidation.sanitized;
+            const sanitizedReceiverId = receiverValidation.sanitized;
+
+            // Insert heart notification
+            try {
+                await db.query(`
+                    INSERT OR REPLACE INTO heart_notifications (sender_id, receiver_id, is_read) 
+                    VALUES (?, ?, FALSE)
+                `, [sanitizedSenderId, sanitizedReceiverId]);
+            } catch (err) {
+                await db.query(`
+                    UPDATE heart_notifications 
+                    SET is_read = FALSE, created_at = CURRENT_TIMESTAMP 
+                    WHERE sender_id = ? AND receiver_id = ?
+                `, [sanitizedSenderId, sanitizedReceiverId]);
+            }
+
+            // Get user info for notification
+            const { rows: receiverRows } = await db.query('SELECT username FROM users WHERE id = ?', [sanitizedReceiverId]);
+            const { rows: senderRows } = await db.query('SELECT username FROM users WHERE id = ?', [sanitizedSenderId]);
+            
+            if (receiverRows.length > 0 && senderRows.length > 0) {
+                const notification = {
+                    type: 'heart',
+                    senderId: sanitizedSenderId,
+                    senderUsername: senderRows[0].username,
+                    receiverId: sanitizedReceiverId,
+                    message: `${senderRows[0].username} sent you a heart! ❤️`,
+                    timestamp: new Date().toISOString()
+                };
+                
+                // Send to specific user
+                io.emit(`heart_notification_${sanitizedReceiverId}`, notification);
+                
+                // Send confirmation to sender
+                socket.emit('heart_sent', { receiverId: sanitizedReceiverId, success: true });
+            }
+        } catch (err) {
+            console.error('Heart notification error:', err);
+            socket.emit('error', { message: 'Failed to send heart notification' });
         }
     });
 
@@ -460,9 +593,10 @@ app.post('/api/mood', async (req, res) => {
         await db.query('UPDATE users SET current_mood_id = ?, last_active = datetime("now") WHERE id = ?', [sanitizedMoodId, sanitizedUserId]);
 
         // Log mood change
+        let moodLogId = null;
         try {
             const result = await db.query('INSERT INTO mood_logs (user_id, mood_id) VALUES (?, ?)', [sanitizedUserId, sanitizedMoodId]);
-            const moodLogId = result.rows[0]?.id;
+            moodLogId = result.rows[0]?.id;
         } catch (err) {
             console.error('Failed to log mood change:', err);
             // Continue without logging mood change
@@ -604,6 +738,373 @@ app.get('/api/messages/:roomId', async (req, res) => {
             avatar: row.avatar
         }));
         res.json(messages);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Heart notification endpoints
+app.post('/api/heart', async (req, res) => {
+    try {
+        const { senderId, receiverId } = req.body;
+
+        // Validate input
+        const senderValidation = validateUserId(senderId);
+        if (!senderValidation.valid) {
+            res.status(400).json({ error: senderValidation.error });
+            return;
+        }
+
+        const receiverValidation = validateUserId(receiverId);
+        if (!receiverValidation.valid) {
+            res.status(400).json({ error: receiverValidation.error });
+            return;
+        }
+
+        const heartValidation = validateHeartNotification(senderId, receiverId);
+        if (!heartValidation.valid) {
+            res.status(400).json({ error: heartValidation.error });
+            return;
+        }
+
+        const sanitizedSenderId = senderValidation.sanitized;
+        const sanitizedReceiverId = receiverValidation.sanitized;
+
+        // Insert or update heart notification
+        try {
+            await db.query(`
+                INSERT OR REPLACE INTO heart_notifications (sender_id, receiver_id, is_read) 
+                VALUES (?, ?, FALSE)
+            `, [sanitizedSenderId, sanitizedReceiverId]);
+        } catch (err) {
+            // If unique constraint violation, just update is_read to false
+            await db.query(`
+                UPDATE heart_notifications 
+                SET is_read = FALSE, created_at = CURRENT_TIMESTAMP 
+                WHERE sender_id = ? AND receiver_id = ?
+            `, [sanitizedSenderId, sanitizedReceiverId]);
+        }
+
+        // Send real-time notification to receiver
+        const { rows: receiverRows } = await db.query('SELECT username FROM users WHERE id = ?', [sanitizedReceiverId]);
+        const { rows: senderRows } = await db.query('SELECT username FROM users WHERE id = ?', [sanitizedSenderId]);
+        
+        if (receiverRows.length > 0 && senderRows.length > 0) {
+            const notification = {
+                type: 'heart',
+                senderId: sanitizedSenderId,
+                senderUsername: senderRows[0].username,
+                receiverId: sanitizedReceiverId,
+                message: `${senderRows[0].username} sent you a heart! ❤️`
+            };
+            
+            io.emit(`heart_notification_${sanitizedReceiverId}`, notification);
+        }
+
+        res.json({ success: true, message: 'Heart sent successfully' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get heart notifications for a user
+app.get('/api/hearts/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        const userIdValidation = validateUserId(userId);
+        if (!userIdValidation.valid) {
+            res.status(400).json({ error: userIdValidation.error });
+            return;
+        }
+
+        const sanitizedUserId = userIdValidation.sanitized;
+        
+        const { rows } = await db.query(`
+            SELECT hn.*, u.username as sender_username, u.avatar as sender_avatar
+            FROM heart_notifications hn
+            JOIN users u ON hn.sender_id = u.id
+            WHERE hn.receiver_id = ?
+            ORDER BY hn.created_at DESC
+            LIMIT 20
+        `, [sanitizedUserId]);
+
+        const notifications = rows.map(row => ({
+            id: row.id,
+            senderId: row.sender_id,
+            senderUsername: row.sender_username,
+            senderAvatar: row.sender_avatar,
+            isRead: Boolean(row.is_read),
+            createdAt: row.created_at
+        }));
+
+        res.json(notifications);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Mark heart notifications as read
+app.patch('/api/hearts/:userId/read', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        const userIdValidation = validateUserId(userId);
+        if (!userIdValidation.valid) {
+            res.status(400).json({ error: userIdValidation.error });
+            return;
+        }
+
+        const sanitizedUserId = userIdValidation.sanitized;
+        
+        await db.query(`
+            UPDATE heart_notifications 
+            SET is_read = TRUE 
+            WHERE receiver_id = ?
+        `, [sanitizedUserId]);
+
+        res.json({ success: true, message: 'Notifications marked as read' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Delete all heart notifications for a user
+app.delete('/api/hearts/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        const userIdValidation = validateUserId(userId);
+        if (!userIdValidation.valid) {
+            res.status(400).json({ error: userIdValidation.error });
+            return;
+        }
+
+        const sanitizedUserId = userIdValidation.sanitized;
+        
+        await db.query(`
+            DELETE FROM heart_notifications 
+            WHERE receiver_id = ?
+        `, [sanitizedUserId]);
+
+        res.json({ success: true, message: 'All heart notifications cleared' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Private chat request endpoints
+app.post('/api/private-chat/request', async (req, res) => {
+    try {
+        const { requesterId, requestedId } = req.body;
+
+        const requesterValidation = validateUserId(requesterId);
+        if (!requesterValidation.valid) {
+            res.status(400).json({ error: requesterValidation.error });
+            return;
+        }
+
+        const requestedValidation = validateUserId(requestedId);
+        if (!requestedValidation.valid) {
+            res.status(400).json({ error: requestedValidation.error });
+            return;
+        }
+
+        if (requesterId === requestedId) {
+            res.status(400).json({ error: 'Cannot request private chat with yourself' });
+            return;
+        }
+
+        const sanitizedRequesterId = requesterValidation.sanitized;
+        const sanitizedRequestedId = requestedValidation.sanitized;
+
+        // Check if request already exists
+        const { rows: existingRequests } = await db.query(`
+            SELECT id, status FROM private_chat_requests 
+            WHERE (requester_id = ? AND requested_id = ?) OR (requester_id = ? AND requested_id = ?)
+        `, [sanitizedRequesterId, sanitizedRequestedId, sanitizedRequestedId, sanitizedRequesterId]);
+
+        if (existingRequests.length > 0) {
+            const existing = existingRequests[0];
+            if (existing.status === 'pending') {
+                res.status(400).json({ error: 'Chat request already pending' });
+                return;
+            } else if (existing.status === 'accepted') {
+                // Return existing private room
+                const { rows: roomRows } = await db.query(`
+                    SELECT id FROM private_chat_rooms 
+                    WHERE (user1_id = ? AND user2_id = ?) OR (user1_id = ? AND user2_id = ?)
+                    AND is_active = TRUE
+                `, [sanitizedRequesterId, sanitizedRequestedId, sanitizedRequestedId, sanitizedRequesterId]);
+                
+                if (roomRows.length > 0) {
+                    res.json({ success: true, roomId: roomRows[0].id, status: 'existing' });
+                    return;
+                }
+            }
+        }
+
+        // Create new chat request
+        const result = await db.query(`
+            INSERT INTO private_chat_requests (requester_id, requested_id) 
+            VALUES (?, ?)
+        `, [sanitizedRequesterId, sanitizedRequestedId]);
+
+        const { rows: requesterRows } = await db.query('SELECT username FROM users WHERE id = ?', [sanitizedRequesterId]);
+        
+        // Send real-time notification to requested user
+        if (requesterRows.length > 0) {
+            const notification = {
+                type: 'private_chat_request',
+                requestId: result.rows[0]?.id,
+                requesterId: sanitizedRequesterId,
+                requesterUsername: requesterRows[0].username,
+                message: `${requesterRows[0].username} wants to start a private chat 💬`
+            };
+            
+            io.emit(`private_chat_request_${sanitizedRequestedId}`, notification);
+        }
+
+        res.json({ success: true, requestId: result.rows[0]?.id, status: 'pending' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Respond to private chat request
+app.post('/api/private-chat/respond', async (req, res) => {
+    try {
+        const { requestId, userId, response } = req.body; // response: 'accept' or 'reject'
+        
+        console.log('Chat respond request received:', { requestId, userId, response });
+
+        if (!['accept', 'reject'].includes(response)) {
+            res.status(400).json({ error: 'Invalid response' });
+            return;
+        }
+
+        const userIdValidation = validateUserId(userId);
+        if (!userIdValidation.valid) {
+            res.status(400).json({ error: userIdValidation.error });
+            return;
+        }
+
+        const sanitizedUserId = userIdValidation.sanitized;
+
+        // Update request status
+        console.log('Updating request:', { requestId, userId, response });
+        
+        const { rows: requestRows } = await db.query(`
+            UPDATE private_chat_requests 
+            SET status = ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE id = ? AND requested_id = ?
+            RETURNING requester_id, requested_id
+        `, [response === 'accept' ? 'accepted' : 'rejected', requestId, sanitizedUserId]);
+
+        console.log('Query result rows:', requestRows);
+
+        if (requestRows.length === 0) {
+            console.log('Request not found - requestId or userId mismatch');
+            res.status(404).json({ error: 'Request not found' });
+            return;
+        }
+
+        const request = requestRows[0];
+        let roomId = null;
+
+        if (response === 'accept') {
+            // Create private chat room
+            const roomResult = await db.query(`
+                INSERT INTO private_chat_rooms (room_name, user1_id, user2_id) 
+                VALUES (?, ?, ?)
+            `, [`private_${request.requester_id}_${request.requested_id}`, request.requester_id, request.requested_id]);
+            
+            roomId = roomResult.rows[0]?.id;
+
+            // Notify both users
+            const notification = {
+                type: 'private_chat_accepted',
+                roomId: roomId,
+                message: 'Private chat started! 💬'
+            };
+            
+            io.emit(`private_chat_accepted_${request.requester_id}`, notification);
+            io.emit(`private_chat_accepted_${request.requested_id}`, notification);
+        } else {
+            // Notify requester of rejection
+            const notification = {
+                type: 'private_chat_rejected',
+                message: 'Private chat request was declined'
+            };
+            
+            io.emit(`private_chat_rejected_${request.requester_id}`, notification);
+        }
+
+        res.json({ 
+            success: true, 
+            status: response,
+            roomId: roomId 
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get pending chat requests for a user
+app.get('/api/private-chat/requests/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        const userIdValidation = validateUserId(userId);
+        if (!userIdValidation.valid) {
+            res.status(400).json({ error: userIdValidation.error });
+            return;
+        }
+
+        const sanitizedUserId = userIdValidation.sanitized;
+        
+        const { rows } = await db.query(`
+            SELECT pcr.*, u.username as requester_username, u.avatar as requester_avatar
+            FROM private_chat_requests pcr
+            JOIN users u ON pcr.requester_id = u.id
+            WHERE pcr.requested_id = ? AND pcr.status = 'pending'
+            ORDER BY pcr.created_at DESC
+            LIMIT 20
+        `, [sanitizedUserId]);
+
+        const requests = rows.map(row => ({
+            id: row.id,
+            requesterId: row.requester_id,
+            requesterUsername: row.requester_username,
+            requesterAvatar: row.requester_avatar,
+            createdAt: row.created_at
+        }));
+
+        res.json(requests);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Delete all pending chat requests for a user
+app.delete('/api/private-chat/requests/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        const userIdValidation = validateUserId(userId);
+        if (!userIdValidation.valid) {
+            res.status(400).json({ error: userIdValidation.error });
+            return;
+        }
+
+        const sanitizedUserId = userIdValidation.sanitized;
+        
+        await db.query(`
+            DELETE FROM private_chat_requests 
+            WHERE requested_id = ? AND status = 'pending'
+        `, [sanitizedUserId]);
+
+        res.json({ success: true, message: 'All pending chat requests cleared' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

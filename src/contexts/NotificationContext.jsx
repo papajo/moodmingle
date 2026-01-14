@@ -1,0 +1,231 @@
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { API_URL } from '../config/api';
+
+const NotificationContext = createContext();
+
+export const useNotifications = () => {
+    const context = useContext(NotificationContext);
+    if (!context) {
+        throw new Error('useNotifications must be used within a NotificationProvider');
+    }
+    return context;
+};
+
+export const NotificationProvider = ({ children }) => {
+    const [notifications, setNotifications] = useState([]);
+    const [chatRequests, setChatRequests] = useState([]);
+    const [unreadCount, setUnreadCount] = useState(0);
+
+    // Recalculate unread count based on current state
+    const recalculateUnreadCount = useCallback((hearts, requests) => {
+        const unreadHearts = hearts.filter(n => !n.isRead).length;
+        const unreadRequests = requests.length;
+        setUnreadCount(unreadHearts + unreadRequests);
+    }, []);
+
+    // Fetch heart notifications
+    const fetchHeartNotifications = useCallback(async (userId) => {
+        if (!userId) return;
+        
+        try {
+            const response = await fetch(`${API_URL}/api/hearts/${userId}`);
+            if (response.ok) {
+                const data = await response.json();
+                // Only show recent notifications (last 24 hours)
+                const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+                const recentNotifications = data.filter(n => 
+                    new Date(n.createdAt).getTime() > oneDayAgo
+                );
+                setNotifications(recentNotifications);
+                
+                // Recalculate unread count with current chat requests
+                setChatRequests(prev => {
+                    recalculateUnreadCount(recentNotifications, prev);
+                    return prev;
+                });
+            }
+        } catch (err) {
+            console.error('Failed to fetch heart notifications:', err);
+        }
+    }, [recalculateUnreadCount]);
+
+    // Fetch chat requests
+    const fetchChatRequests = useCallback(async (userId) => {
+        if (!userId) return;
+        
+        try {
+            const response = await fetch(`${API_URL}/api/private-chat/requests/${userId}`);
+            if (response.ok) {
+                const data = await response.json();
+                // Only show recent requests (last 24 hours)
+                const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+                const recentRequests = data.filter(r => 
+                    new Date(r.createdAt).getTime() > oneDayAgo
+                );
+                setChatRequests(recentRequests);
+                
+                // Recalculate unread count with current notifications
+                setNotifications(prev => {
+                    recalculateUnreadCount(prev, recentRequests);
+                    return prev;
+                });
+            }
+        } catch (err) {
+            console.error('Failed to fetch chat requests:', err);
+        }
+    }, [recalculateUnreadCount]);
+
+    // Mark hearts as read
+    const markHeartsAsRead = useCallback(async (userId) => {
+        if (!userId) return;
+        
+        try {
+            const response = await fetch(`${API_URL}/api/hearts/${userId}/read`, {
+                method: 'PATCH'
+            });
+            
+            if (response.ok) {
+                // Update local state
+                setNotifications(prev => {
+                    const updated = prev.map(n => ({ ...n, isRead: true }));
+                    const unreadCount = updated.filter(n => !n.isRead).length;
+                    setUnreadCount(prevCount => prevCount - (prev.filter(n => !n.isRead).length));
+                    return updated;
+                });
+            }
+        } catch (err) {
+            console.error('Failed to mark hearts as read:', err);
+        }
+    }, []);
+
+    // Accept chat request
+    const acceptChatRequest = useCallback(async (requestId, userId) => {
+        console.log('Accepting chat request:', { requestId, userId });
+        
+        try {
+            const response = await fetch(`${API_URL}/api/private-chat/respond`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    requestId, 
+                    userId, 
+                    response: 'accept' 
+                })
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                console.log('Chat request accepted:', result);
+                
+                // Remove from pending requests and update unread count
+                setChatRequests(prev => {
+                    const updated = prev.filter(req => req.id !== requestId);
+                    setUnreadCount(count => Math.max(0, count - (prev.length - updated.length)));
+                    return updated;
+                });
+                
+                // Here you could navigate to the private chat room
+                if (result.roomId) {
+                    console.log('Private chat room ready:', result.roomId);
+                    // You might want to update the current tab to the private chat
+                }
+            }
+        } catch (err) {
+            console.error('Failed to accept chat request:', err);
+        }
+    }, []);
+
+    // Reject chat request
+    const rejectChatRequest = useCallback(async (requestId, userId) => {
+        try {
+            const response = await fetch(`${API_URL}/api/private-chat/respond`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    requestId, 
+                    userId, 
+                    response: 'reject' 
+                })
+            });
+
+            if (response.ok) {
+                // Remove from pending requests and update unread count
+                setChatRequests(prev => {
+                    const updated = prev.filter(req => req.id !== requestId);
+                    setUnreadCount(count => Math.max(0, count - (prev.length - updated.length)));
+                    return updated;
+                });
+            }
+        } catch (err) {
+            console.error('Failed to reject chat request:', err);
+        }
+    }, []);
+
+    // Add real-time notification
+    const addNotification = useCallback((notification) => {
+        if (notification.type === 'heart') {
+            setNotifications(prev => [notification, ...prev]);
+            setUnreadCount(prev => prev + 1);
+        } else if (notification.type === 'private_chat_request') {
+            setChatRequests(prev => [notification, ...prev]);
+            setUnreadCount(prev => prev + 1);
+        }
+    }, []);
+
+    // Clear all notifications
+    const clearAllNotifications = useCallback(async (userId) => {
+        if (!userId) {
+            // If no userId provided, just clear local state
+            setNotifications([]);
+            setChatRequests([]);
+            setUnreadCount(0);
+            return;
+        }
+        
+        try {
+            // Delete all heart notifications for user
+            const heartsResponse = await fetch(`${API_URL}/api/hearts/${userId}`, {
+                method: 'DELETE'
+            });
+            
+            // Delete all pending chat requests for user
+            const requestsResponse = await fetch(`${API_URL}/api/private-chat/requests/${userId}`, {
+                method: 'DELETE'
+            });
+            
+            if (heartsResponse.ok || requestsResponse.ok) {
+                // Clear local state
+                setNotifications([]);
+                setChatRequests([]);
+                setUnreadCount(0);
+            }
+        } catch (err) {
+            console.error('Failed to clear notifications:', err);
+            // Still clear local state even if API call fails
+            setNotifications([]);
+            setChatRequests([]);
+            setUnreadCount(0);
+        }
+    }, []);
+
+    return (
+        <NotificationContext.Provider
+            value={{
+                notifications,
+                chatRequests,
+                unreadCount,
+                fetchHeartNotifications,
+                fetchChatRequests,
+                markHeartsAsRead,
+                acceptChatRequest,
+                rejectChatRequest,
+                addNotification,
+                clearAllNotifications
+            }}
+        >
+            {children}
+        </NotificationContext.Provider>
+    );
+};
+
+export default NotificationProvider;
